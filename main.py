@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo
 import requests
 from icalendar import Calendar
 import lms
+import dashboard
 
 try:
     sys.stdout.reconfigure(encoding="utf-8")
@@ -152,30 +153,51 @@ def check():
         send("\n".join(lines))
         save_state({"items": list(items), "deadlines": {k: v["due"] for k, v in deadlines.items()},
                     "reminded": {}})
+        update_dashboard(items, deadlines, [])
         return
     seen, known_dl, reminded = set(st["items"]), st["deadlines"], st["reminded"]
+    events = []
+
+    def log(kind, title, course, url=""):
+        events.append({"t": now.isoformat(), "kind": kind, "title": title, "course": course, "url": url})
     for k, it in items.items():
         if k not in seen:
             icon = ICONS.get(it["module"], "🆕")
             send(f"{icon} <b>New in {html.escape(it['course'])}</b>\n{html.escape(it['name'])}\n{it['url']}")
+            log("new", it["name"], it["course"], it["url"])
     for k, d in deadlines.items():
         due = datetime.fromisoformat(d["due"])
         if k not in known_dl:
             if due > now:
                 send(f"⏰ <b>New deadline</b>\n{html.escape(d['title'])}\n{html.escape(d['course'])}\nDue {fmt_due(d['due'])}")
+                log("deadline", d["title"], d["course"])
         elif known_dl[k] != d["due"]:
             send(f"🔄 <b>Deadline changed</b>\n{html.escape(d['title'])}\nNow due {fmt_due(d['due'])}")
+            log("changed", d["title"], d["course"])
             reminded.pop(k + "|24", None); reminded.pop(k + "|3", None)
         for hrs in (24, 3):
             tag = f"{k}|{hrs}"
             if tag not in reminded and now < due <= now + timedelta(hours=hrs):
                 send(f"⚠️ <b>Due in under {hrs} hours</b>\n{html.escape(d['title'])}\n{html.escape(d['course'])}\n{fmt_due(d['due'])}")
                 reminded[tag] = True
+                log("reminder", f"{d['title']} (under {hrs}h)", d["course"])
     if errors:
         print("warnings:", errors)
     save_state({"items": list(set(st["items"]) | set(items)),
                 "deadlines": {**known_dl, **{k: v["due"] for k, v in deadlines.items()}},
                 "reminded": reminded})
+    update_dashboard(items, deadlines, events)
+
+
+def update_dashboard(items, deadlines, events):
+    key = os.getenv("DASH_KEY")
+    if not key:
+        return
+    try:
+        if dashboard.write(key, items, deadlines, events):
+            print("dashboard data updated")
+    except Exception as e:
+        print("dashboard update failed:", e)
 
 
 if __name__ == "__main__":

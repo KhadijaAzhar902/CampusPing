@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CampusPing</title>
+<style>
+:root{--bg:#f6f5f2;--card:#fff;--ink:#1b1b1f;--muted:#6b6b76;--line:#e6e4de;--accent:#d6336c;--soft:#fbe7ef;--warn:#b45309;--warnbg:#fef3c7;--ok:#15803d}
+@media (prefers-color-scheme:dark){:root:not([data-theme=light]){--bg:#121214;--card:#1c1c20;--ink:#ececf1;--muted:#9a9aa6;--line:#2c2c33;--accent:#f06595;--soft:#33202a;--warn:#fbbf24;--warnbg:#3a2e12;--ok:#4ade80}}
+:root[data-theme=dark]{--bg:#121214;--card:#1c1c20;--ink:#ececf1;--muted:#9a9aa6;--line:#2c2c33;--accent:#f06595;--soft:#33202a;--warn:#fbbf24;--warnbg:#3a2e12;--ok:#4ade80}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+main{max-width:760px;margin:0 auto;padding:20px 16px 60px}
+header{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:20px}
+h1{font-size:1.4rem;margin:0;letter-spacing:-.01em}
+h1 span{color:var(--accent)}
+h2{font-size:.8rem;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin:28px 0 10px;font-weight:600}
+.sub{color:var(--muted);font-size:.85rem}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px 16px}
+.row{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;padding:12px 0;border-bottom:1px solid var(--line)}
+.row:last-child{border-bottom:0}
+.row b{font-weight:600}
+.course{color:var(--muted);font-size:.85rem}
+.chip{white-space:nowrap;font-size:.8rem;font-weight:600;padding:3px 10px;border-radius:99px;background:var(--soft);color:var(--accent)}
+.chip.soon{background:var(--warnbg);color:var(--warn)}
+.chip.later{background:transparent;border:1px solid var(--line);color:var(--muted)}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:12px}
+.grid .card h3{margin:0 0 2px;font-size:.95rem}
+.grid ul{margin:8px 0 0;padding-left:18px;color:var(--muted);font-size:.85rem}
+a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
+button,input{font:inherit}
+button{border:0;border-radius:10px;padding:10px 16px;background:var(--accent);color:#fff;font-weight:600;cursor:pointer}
+button.ghost{background:transparent;color:var(--muted);border:1px solid var(--line);padding:6px 12px;font-weight:500;font-size:.85rem}
+input[type=password]{width:100%;padding:11px 12px;border-radius:10px;border:1px solid var(--line);background:var(--bg);color:var(--ink)}
+.lock{max-width:380px;margin:12vh auto 0;text-align:center}
+.lock p{color:var(--muted)}
+.lock form{display:grid;gap:10px;margin-top:16px;text-align:left}
+.lock label.chk{font-size:.85rem;color:var(--muted);display:flex;gap:8px;align-items:center}
+.err{color:#dc2626;font-size:.9rem;min-height:1.2em;text-align:center}
+.empty{color:var(--muted);padding:6px 0}
+.demo{background:var(--soft);color:var(--accent);padding:8px 14px;border-radius:10px;font-size:.85rem;margin-bottom:16px}
+[hidden]{display:none!important}
+</style>
+</head>
+<body>
+<main>
+  <section id="lock" class="lock" hidden>
+    <h1><span>Campus</span>Ping</h1>
+    <p>Your deadlines and new LMS items, in one place.</p>
+    <form id="form">
+      <input id="pass" type="password" placeholder="Passphrase" autocomplete="current-password" required>
+      <label class="chk"><input id="remember" type="checkbox"> Remember on this device</label>
+      <button type="submit">Unlock</button>
+      <div class="err" id="err" role="alert"></div>
+    </form>
+    <button class="ghost" id="demoBtn" type="button">View demo with sample data</button>
+  </section>
+
+  <section id="app" hidden>
+    <header>
+      <div><h1><span>Campus</span>Ping</h1><div class="sub" id="updated"></div></div>
+      <button class="ghost" id="lockBtn" type="button">Lock</button>
+    </header>
+    <div class="demo" id="demoNote" hidden>Demo mode: all data below is made up.</div>
+    <h2>Next up</h2><div class="card" id="deadlines"></div>
+    <h2>Recent alerts</h2><div class="card" id="history"></div>
+    <h2>Courses</h2><div class="grid" id="courses"></div>
+  </section>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+const TZ = "Asia/Karachi";
+const KINDS = {new:"New", deadline:"Deadline", changed:"Changed", reminder:"Reminder"};
+let DATA = null, timer = null;
+
+function el(tag, props = {}, ...kids) {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(props)) {
+    if (k === "class") e.className = v; else if (k === "text") e.textContent = v; else e.setAttribute(k, v);
+  }
+  for (const kid of kids) if (kid) e.append(kid);
+  return e;
+}
+const safeUrl = u => { try { const x = new URL(u); return /^https?:$/.test(x.protocol) ? x.href : null; } catch { return null; } };
+const fmtDate = iso => new Date(iso).toLocaleString("en-GB", {timeZone: TZ, weekday:"short", day:"numeric", month:"short", hour:"numeric", minute:"2-digit", hour12:true});
+const fmtAgo = iso => {
+  const m = Math.round((Date.now() - new Date(iso)) / 60000);
+  if (m < 1) return "just now"; if (m < 60) return m + " min ago";
+  if (m < 1440) return Math.round(m / 60) + " h ago";
+  return Math.round(m / 1440) + " d ago";
+};
+function countdown(iso) {
+  const ms = new Date(iso) - Date.now(), h = ms / 36e5;
+  if (ms <= 0) return {text:"overdue", cls:"soon"};
+  if (h < 1) return {text:Math.max(1, Math.round(ms / 60000)) + " min", cls:"soon"};
+  if (h < 24) return {text:Math.round(h) + " h", cls:"soon"};
+  const d = Math.floor(h / 24);
+  return {text:d + " d " + Math.round(h - d * 24) + " h", cls: d < 3 ? "soon" : "later"};
+}
+
+function render() {
+  const d = DATA, dl = $("deadlines"), hs = $("history"), cs = $("courses");
+  $("updated").textContent = d.generated ? "Last change detected " + fmtAgo(d.generated) : "";
+  dl.replaceChildren(); hs.replaceChildren(); cs.replaceChildren();
+  const upcoming = d.deadlines.filter(x => new Date(x.due) > Date.now() - 36e5);
+  if (!upcoming.length) dl.append(el("div", {class:"empty", text:"No open deadlines. Nice."}));
+  for (const x of upcoming) {
+    const c = countdown(x.due);
+    dl.append(el("div", {class:"row"},
+      el("div", {}, el("b", {text:x.title}), el("div", {class:"course", text:x.course + " · " + fmtDate(x.due)})),
+      el("span", {class:"chip " + c.cls, text:c.text})));
+  }
+  if (!d.history.length) hs.append(el("div", {class:"empty", text:"Nothing new yet. Alerts will appear here."}));
+  for (const x of d.history.slice(0, 15)) {
+    const u = safeUrl(x.url);
+    hs.append(el("div", {class:"row"},
+      el("div", {}, u ? el("a", {href:u, target:"_blank", rel:"noopener noreferrer", text:x.title}) : el("b", {text:x.title}),
+         el("div", {class:"course", text:x.course + " · " + fmtAgo(x.t)})),
+      el("span", {class:"chip later", text:KINDS[x.kind] || "Update"})));
+  }
+  for (const c of d.courses) {
+    const ul = el("ul");
+    for (const i of c.latest.slice(0, 3)) {
+      const u = safeUrl(i.url);
+      ul.append(el("li", {}, u ? el("a", {href:u, target:"_blank", rel:"noopener noreferrer", text:i.name}) : i.name));
+    }
+    cs.append(el("div", {class:"card"}, el("h3", {text:c.name}), el("div", {class:"sub", text:c.count + " items"}), ul));
+  }
+}
+function show(data, demo) {
+  DATA = data;
+  $("lock").hidden = true; $("app").hidden = false; $("demoNote").hidden = !demo;
+  render(); clearInterval(timer); timer = setInterval(render, 60000);
+}
+
+const b64 = s => Uint8Array.from(atob(s), c => c.charCodeAt(0));
+async function decrypt(pass, blob) {
+  const base = await crypto.subtle.importKey("raw", new TextEncoder().encode(pass), "PBKDF2", false, ["deriveKey"]);
+  const key = await crypto.subtle.deriveKey({name:"PBKDF2", salt:b64(blob.s), iterations:blob.iter, hash:"SHA-256"},
+    base, {name:"AES-GCM", length:256}, false, ["decrypt"]);
+  const plain = await crypto.subtle.decrypt({name:"AES-GCM", iv:b64(blob.i)}, key, b64(blob.c));
+  return JSON.parse(new TextDecoder().decode(plain));
+}
+async function unlock(pass, remember) {
+  $("err").textContent = "";
+  try {
+    const r = await fetch("data.enc.json", {cache:"no-store"});
+    if (!r.ok) throw new Error("no data");
+    const data = await decrypt(pass, await r.json());
+    if (remember) { try { localStorage.setItem("cp_pass", pass); } catch {} }
+    show(data, false);
+  } catch (e) {
+    $("err").textContent = e.message === "no data" ? "No data published yet. Wait for the first update." : "Wrong passphrase.";
+    $("lock").hidden = false;
+  }
+}
+
+const hrs = h => new Date(Date.now() + h * 36e5).toISOString();
+const ago = h => new Date(Date.now() - h * 36e5).toISOString();
+const DEMO = {
+  generated: ago(1),
+  deadlines: [
+    {title:"Lab Task 4", course:"CS201 Data Structures", due:hrs(5)},
+    {title:"Quiz 2", course:"MG101 Marketing", due:hrs(30)},
+    {title:"Assignment 1", course:"IT310 Web Technologies", due:hrs(26 * 4)},
+    {title:"Project Proposal", course:"SE330 Software Engineering", due:hrs(24 * 12)}],
+  history: [
+    {t:ago(0.4), kind:"new", title:"Week 6 Slides", course:"CS201 Data Structures", url:""},
+    {t:ago(3), kind:"deadline", title:"Quiz 2", course:"MG101 Marketing", url:""},
+    {t:ago(20), kind:"new", title:"Announcement: class moved to Room 12", course:"SE330 Software Engineering", url:""},
+    {t:ago(30), kind:"reminder", title:"Lab Task 3 (under 24h)", course:"CS201 Data Structures", url:""}],
+  courses: [
+    {name:"CS201 Data Structures", count:34, latest:[{name:"Week 6 Slides"},{name:"Lab Manual 4"},{name:"Announcements"}]},
+    {name:"MG101 Marketing", count:21, latest:[{name:"Chapter 5 Notes"},{name:"Quiz 2"}]},
+    {name:"IT310 Web Technologies", count:28, latest:[{name:"Assignment 1"},{name:"Figma Template"}]},
+    {name:"SE330 Software Engineering", count:19, latest:[{name:"Project Guidelines"},{name:"Announcements"}]}]
+};
+
+$("form").addEventListener("submit", e => { e.preventDefault(); unlock($("pass").value, $("remember").checked); });
+$("demoBtn").addEventListener("click", () => show(DEMO, true));
+$("lockBtn").addEventListener("click", () => {
+  try { localStorage.removeItem("cp_pass"); } catch {}
+  clearInterval(timer); DATA = null; $("pass").value = ""; $("app").hidden = true; $("lock").hidden = false;
+});
+(async () => {
+  if (new URLSearchParams(location.search).has("demo")) return show(DEMO, true);
+  let saved = null; try { saved = localStorage.getItem("cp_pass"); } catch {}
+  $("lock").hidden = false;
+  if (saved) unlock(saved, false);
+})();
+</script>
+</body>
+</html>
