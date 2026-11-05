@@ -11,6 +11,7 @@ import requests
 from icalendar import Calendar
 import lms
 import dashboard
+import deep
 
 try:
     sys.stdout.reconfigure(encoding="utf-8")
@@ -22,7 +23,8 @@ STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "state.jso
 INTERVAL_MIN = 15
 DRY = "--dry" in sys.argv
 ICONS = {"assign": "📝", "quiz": "❓", "resource": "📄", "folder": "📁", "forum": "📣",
-         "url": "🔗", "page": "📃", "book": "📖", "lesson": "🎓"}
+         "url": "🔗", "page": "📃", "book": "📖", "lesson": "🎓", "post": "📣", "pluginfile": "📄", "update": "✏️",
+         "label": "🆕"}
 
 
 def plain(text):
@@ -105,7 +107,13 @@ def excluded(fullname):
     return fullname.strip().upper().startswith(EXCLUDE)
 
 
-def collect(s):
+def clean(text):
+    text = re.sub(r"&\w*;?\.{3}$", "", text or "")  # the LMS truncates names mid-entity: '...&nbs...'
+    return re.sub(r"\s+", " ", html.unescape(text)).replace("✦", "").strip()
+
+
+def collect(s, deep_labels=True, prev_labels=None):
+    """deep_labels: also open every week page to find handouts hidden in text blocks (slower)."""
     sesskey = lms._sesskey(s.get(f"{lms.BASE}/my/", timeout=30).text)
     courses = []
     for cls in ("inprogress", "future"):  # 'future' = enrolled but not started yet
@@ -122,10 +130,36 @@ def collect(s):
         except Exception as e:
             errors.append(f"{cname}: {e}")
             continue
+        label_sections, forum_cms = set(), []
         for cm in st.get("cm", []):
-            if cm.get("visible", True) and cm.get("module") != "label":
-                items[f"cm{cm['id']}"] = {"course": cname, "name": cm["name"],
-                                          "module": cm.get("module", ""), "url": cm.get("url", "")}
+            if not cm.get("visible", True):
+                continue
+            if cm.get("module") == "label":
+                label_sections.add(cm.get("sectionnumber"))
+                if clean(cm["name"]):  # a text block: only worth an alert if the teacher adds a new one
+                    items[f"cm{cm['id']}"] = {"course": cname, "name": clean(cm["name"])[:140],
+                                              "module": "label", "url": f"{lms.BASE}/course/view.php?id={c['id']}"}
+                continue
+            if cm.get("module") == "forum":
+                forum_cms.append(cm["id"])
+            items[f"cm{cm['id']}"] = {"course": cname, "name": clean(cm["name"]),
+                                      "module": cm.get("module", ""), "url": cm.get("url", "")}
+        # --- things the course list hides: forum posts (every run) and handouts inside text blocks ---
+        try:
+            posts, e1 = deep.forum_posts(s, lms.BASE, forum_cms)
+            for k, p in posts.items():
+                items[k] = {"course": cname, **p}
+            errors += [f"{cname}: {e}" for e in e1]
+            if deep_labels:
+                links, e2 = deep.label_links(s, lms.BASE, c["id"], sorted(x for x in label_sections if x is not None))
+                for k, p in links.items():
+                    items[k] = {"course": cname, **p}
+                errors += [f"{cname}: {e}" for e in e2]
+        except Exception as e:
+            errors.append(f"{cname} deep scan: {e}")
+    deep_failed = any("section" in e for e in errors)
+    if prev_labels and (not deep_labels or deep_failed):  # reuse last scan's handout list so nothing flaps
+        items.update({k: v for k, v in prev_labels.items() if k not in items})
     # deadlines from the Timeline (not limited to ~60 days like the calendar export)
     deadlines, after, now = {}, None, int(time.time())
     while True:
@@ -148,7 +182,7 @@ def collect(s):
 
 def direct_url(s, it, cache):
     """Web-link items (Drive, YouTube, ...) open on an LMS 'click here' page. Return the real address."""
-    if it["module"] != "url" or not it["url"]:
+    if it["module"] != "url" or "/mod/url/" not in it["url"]:
         return it["url"]
     if it["url"] in cache:
         return cache[it["url"]]
@@ -171,12 +205,17 @@ def fmt_due(iso):
 
 def check():
     s = lms.login()
-    items, deadlines, errors = collect(s)
     st = load_state()
     key = os.getenv("DASH_KEY")
-    cache = dict(((dashboard.previous(key) or {}).get("resolved", {}))) if key else {}
-    resolve = lambda it: direct_url(s, it, cache)
+    prev = (dashboard.previous(key) or {}) if key else {}
+    cache = dict(prev.get("resolved", {}))
     now = datetime.now(timezone.utc)
+    # Hourly deep scan of week pages (handouts hidden in text blocks); forum posts are checked every run.
+    deep_due = (st is None or not st.get("deep_baselined") or not prev.get("labels")
+                or time.time() - st.get("last_deep", 0) > 55 * 60)
+    items, deadlines, errors = collect(s, deep_labels=deep_due, prev_labels=prev.get("labels"))
+    last_deep = time.time() if deep_due else (st or {}).get("last_deep", 0)
+    resolve = lambda it: direct_url(s, it, cache)
     if st is None:  # first run: remember what exists, don't spam
         upcoming = sorted((d for d in deadlines.values() if datetime.fromisoformat(d["due"]) > now),
                           key=lambda d: d["due"])
@@ -187,19 +226,40 @@ def check():
             lines += [f"• {html.escape(d['title'])} — {fmt_due(d['due'])}" for d in upcoming[:10]]
         send("\n".join(lines))
         save_state({"items": list(items), "deadlines": {k: v["due"] for k, v in deadlines.items()},
-                    "reminded": {}})
+                    "reminded": {}, "deep_baselined": True, "last_deep": last_deep})
         update_dashboard(items, deadlines, [], resolve, cache)
         return
     seen, known_dl, reminded = set(st["items"]), st["deadlines"], st["reminded"]
     events = []
+    if not st.get("deep_baselined"):
+        # One-time catch-up: handouts hidden in text blocks and forum posts were never scanned before,
+        # so send them as ONE summary instead of dozens of separate alerts.
+        old = {k: it for k, it in items.items() if k not in seen and k[:2] in ("lb", "fd")}
+        if old:
+            by_course = {}
+            for it in old.values():
+                by_course.setdefault(it["course"], []).append(it)
+            lines = [f"🔎 <b>Catch-up: {len(old)} earlier items CampusPing had missed</b>",
+                     "These were already on your LMS (hidden handouts and forum posts)."]
+            for course, lst in sorted(by_course.items()):
+                lines.append(f"\n<b>{html.escape(course)}</b>")
+                lines += [f"• {html.escape(i['name'])}\n  {i['url']}" for i in lst[:25]]
+                if len(lst) > 25:
+                    lines.append(f"  …and {len(lst) - 25} more")
+            send("\n".join(lines))
+        seen |= set(old)
+        # the 23 template text blocks per course already exist: remember them silently
+        seen |= {k for k, it in items.items() if it["module"] == "label" or k.startswith("tx")}
 
     def log(kind, title, course, url=""):
         events.append({"t": now.isoformat(), "kind": kind, "title": title, "course": course, "url": url})
     for k, it in items.items():
         if k not in seen:
             icon = ICONS.get(it["module"], "🆕")
-            send(f"{icon} <b>New in {html.escape(it['course'])}</b>\n{html.escape(it['name'])}\n{it['url']}")
-            log("new", it["name"], it["course"], it["url"])
+            link = resolve(it)
+            what = {"post": "New post", "pluginfile": "New handout", "label": "New note", "update": "Week text updated"}.get(it["module"], "New")
+            send(f"{icon} <b>{what} in {html.escape(it['course'])}</b>\n{html.escape(it['name'])}\n{link}")
+            log("new", it["name"], it["course"], link)
     for k, d in deadlines.items():
         due = datetime.fromisoformat(d["due"])
         if k not in known_dl:
@@ -218,9 +278,9 @@ def check():
                 log("reminder", f"{d['title']} (under {hrs}h)", d["course"])
     if errors:
         print("warnings:", errors)
-    save_state({"items": list(set(st["items"]) | set(items)),
+    save_state({"items": list(seen | set(items)),
                 "deadlines": {**known_dl, **{k: v["due"] for k, v in deadlines.items()}},
-                "reminded": reminded})
+                "reminded": reminded, "deep_baselined": True, "last_deep": last_deep})
     update_dashboard(items, deadlines, events, resolve, cache)
 
 

@@ -42,22 +42,29 @@ def write(passphrase, items, deadlines, new_events, resolve=None, cache=None):
     """items/deadlines come from main.collect(); new_events are alerts sent in this run."""
     old = previous(passphrase) or {}
     history = (new_events + old.get("history", []))[:MAX_HISTORY]
+    def order(k):  # newer items have bigger ids
+        return int(k[2:].split("|")[0])
     courses = {}
     for k, it in items.items():
-        courses.setdefault(it["course"], []).append((int(k[2:]), it))
+        courses.setdefault(it["course"], []).append((order(k), k, it))
     cache = {} if cache is None else cache
     def url_of(i):
         return resolve(i) if resolve else i["url"]
+    def card(name, lst):
+        lst = sorted(lst, key=lambda x: -x[0])
+        posts = [x for x in lst if x[2]["module"] == "post"][:2]
+        rest = [x for x in lst if x[2]["module"] not in ("post", "label", "update")][:5 - len(posts)]
+        return {"name": name, "count": sum(1 for x in lst if x[2]["module"] not in ("label", "update")),
+                "latest": [{"name": i["name"], "module": i["module"], "url": url_of(i)}
+                           for _, _, i in posts + rest]}
     payload = {
-        "courses": [{"name": name, "count": len(lst),
-                     "latest": [{"name": i["name"], "module": i["module"], "url": url_of(i)}
-                                for _, i in sorted(lst, key=lambda x: -x[0])[:5]]}
-                    for name, lst in sorted(courses.items())],
+        "courses": [card(name, lst) for name, lst in sorted(courses.items())],
         "deadlines": sorted(({"title": d["title"], "course": d["course"], "due": d["due"]}
                              for d in deadlines.values()), key=lambda d: d["due"]),
         "history": history,
+        "labels": {k: i for k, i in items.items() if k[:2] in ("lb", "tx")},  # remembered between hourly deep scans
         "resolved": {u: v for u, v in cache.items()
-                     if any(u == i["url"] for _, lst in courses.items() for _, i in lst)},
+                     if any(u == i["url"] for lst in courses.values() for _, _, i in lst)},
     }
     # Only rewrite when something changed, so we don't make a commit every 15 minutes.
     if old and all(old.get(k) == payload[k] for k in payload):
