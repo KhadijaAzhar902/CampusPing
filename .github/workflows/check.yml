@@ -24,7 +24,7 @@ jobs:
           LMS_USER: ${{ secrets.LMS_USER }}
           LMS_PASS: ${{ secrets.LMS_PASS }}
           EMAIL_USER: ${{ secrets.EMAIL_USER }}
-          EMAIL_APP_PASSWORD: ${{ secrets.EMAIL_APP_PASSWORD }}
+          EMAIL_APP_PASSWORD: ${{ secrets.EMAIL_APP_PASS }}
         run: python main.py --once
       - name: Save what we've already seen
         run: |
