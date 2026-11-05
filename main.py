@@ -214,6 +214,8 @@ def check():
     deep_due = (st is None or not st.get("deep_baselined") or not prev.get("labels")
                 or time.time() - st.get("last_deep", 0) > 55 * 60)
     items, deadlines, errors = collect(s, deep_labels=deep_due, prev_labels=prev.get("labels"))
+    if not items:  # logged in but saw nothing: the login/page layout probably changed
+        raise RuntimeError("LMS returned no courses or items (login or layout may have changed)")
     last_deep = time.time() if deep_due else (st or {}).get("last_deep", 0)
     resolve = lambda it: direct_url(s, it, cache)
     if st is None:  # first run: remember what exists, don't spam
@@ -295,13 +297,41 @@ def update_dashboard(items, deadlines, events, resolve, cache):
         print("dashboard update failed:", e)
 
 
+FAIL_AFTER = 3          # consecutive failed runs (about 45 min) before you get an email
+REMIND_AFTER_H = 24     # while it stays broken, remind once a day
+
+
+def run_check():
+    """Run one check; if the LMS can't be read, count failures and email you (once, then daily)."""
+    before = load_state() or {}
+    try:
+        check()  # a successful check saves fresh state, which resets the failure counter
+    except Exception as e:
+        reason = re.sub(r"(sesskey|token|password)=[^&\s'\"]+", r"\1=***", f"{type(e).__name__}: {str(e)[:200]}")
+        print(f"::error::CampusPing check failed: {reason}")
+        st = load_state()
+        if st is None:
+            return
+        st["fails"] = st.get("fails", 0) + 1
+        due = (not st.get("fail_alerted")) or time.time() - st.get("fail_alert_t", 0) > REMIND_AFTER_H * 3600
+        if st["fails"] >= FAIL_AFTER and due:
+            send("🚨 <b>CampusPing can't read your LMS</b>\n"
+                 f"It has failed {st['fails']} checks in a row, so you may be missing updates.\n"
+                 f"Reason: {html.escape(reason)}\n"
+                 "Check the LMS yourself for now. Common causes: changed LMS password, LMS down or "
+                 "blocking, or a layout change.")
+            st["fail_alerted"], st["fail_alert_t"] = True, time.time()
+        save_state(st)
+        return
+    if before.get("fail_alerted"):
+        send("✅ <b>CampusPing is working again</b>\nIt can read your LMS again. Anything posted while it "
+             "was down will show up as normal new alerts.")
+
+
 if __name__ == "__main__":
     if "--once" in sys.argv:
-        check()
+        run_check()
     else:
         while True:
-            try:
-                check()
-            except Exception as e:
-                print(datetime.now(), "check failed:", e)
+            run_check()
             time.sleep(INTERVAL_MIN * 60)
