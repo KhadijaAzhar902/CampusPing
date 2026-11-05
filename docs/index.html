@@ -27,6 +27,9 @@ h2{font-size:.8rem;text-transform:uppercase;letter-spacing:.08em;color:var(--mut
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:12px}
 .grid .card h3{margin:0 0 2px;font-size:.95rem}
 .grid ul{margin:8px 0 0;padding-left:18px;color:var(--muted);font-size:.85rem}
+.tag{font-size:.75rem;opacity:.8}
+button.more{background:none;color:var(--accent);padding:6px 0 0;margin-top:6px;font-size:.85rem;font-weight:600}
+button.more:hover{text-decoration:underline}
 a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
 button,input{font:inherit}
 button{border:0;border-radius:10px;padding:10px 16px;background:var(--accent);color:#fff;font-weight:600;cursor:pointer}
@@ -69,6 +72,9 @@ input[type=password]{width:100%;padding:11px 12px;border-radius:10px;border:1px 
 const $ = id => document.getElementById(id);
 const TZ = "Asia/Karachi";
 const KINDS = {new:"New", deadline:"Deadline", changed:"Changed", reminder:"Reminder"};
+const TYPES = {resource:"File", pluginfile:"Handout", url:"Link", assign:"Assignment", quiz:"Quiz", forum:"Forum",
+               post:"Post", folder:"Folder", page:"Page", book:"Book"};
+const OPEN = new Set();   // courses whose full list is expanded
 let DATA = null, timer = null;
 
 function el(tag, props = {}, ...kids) {
@@ -117,12 +123,22 @@ function render() {
       el("span", {class:"chip later", text:KINDS[x.kind] || "Update"})));
   }
   for (const c of d.courses) {
+    const all = c.items || c.latest || [], open = OPEN.has(c.name), shown = open ? all : all.slice(0, 3);
     const ul = el("ul");
-    for (const i of c.latest.slice(0, 3)) {
-      const u = safeUrl(i.url);
-      ul.append(el("li", {}, u ? el("a", {href:u, target:"_blank", rel:"noopener noreferrer", text:i.name}) : i.name));
+    for (const i of shown) {
+      const u = safeUrl(i.url), tag = TYPES[i.module];
+      ul.append(el("li", {}, u ? el("a", {href:u, target:"_blank", rel:"noopener noreferrer", text:i.name}) : i.name,
+        tag ? el("span", {class:"tag", text:" · " + tag}) : null));
     }
-    cs.append(el("div", {class:"card"}, el("h3", {text:c.name}), el("div", {class:"sub", text:c.count + " items"}), ul));
+    const card = el("div", {class:"card"}, el("h3", {text:c.name}),
+      el("div", {class:"sub", text:c.count + " items"}), ul);
+    if (all.length > 3) {
+      const b = el("button", {class:"more", type:"button", "aria-expanded":String(open),
+        text: open ? "Show less" : "Show all " + all.length});
+      b.addEventListener("click", () => { open ? OPEN.delete(c.name) : OPEN.add(c.name); render(); });
+      card.append(b);
+    }
+    cs.append(card);
   }
 }
 function show(data) {

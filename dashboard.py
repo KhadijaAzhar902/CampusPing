@@ -52,11 +52,12 @@ def write(passphrase, items, deadlines, new_events, resolve=None, cache=None):
         return resolve(i) if resolve else i["url"]
     def card(name, lst):
         lst = sorted(lst, key=lambda x: -x[0])
-        posts = [x for x in lst if x[2]["module"] == "post"][:2]
-        rest = [x for x in lst if x[2]["module"] not in ("post", "label", "update")][:5 - len(posts)]
-        return {"name": name, "count": sum(1 for x in lst if x[2]["module"] not in ("label", "update")),
-                "latest": [{"name": i["name"], "module": i["module"], "url": url_of(i)}
-                           for _, _, i in posts + rest]}
+        posts = [x for x in lst if x[2]["module"] == "post"]
+        rest = [x for x in lst if x[2]["module"] not in ("post", "label", "update")]
+        # every item, newest first (forum posts lead): the page shows 3 and expands to all
+        return {"name": name, "count": len(posts) + len(rest),
+                "items": [{"name": i["name"], "module": i["module"], "url": url_of(i)}
+                          for _, _, i in posts + rest]}
     payload = {
         "courses": [card(name, lst) for name, lst in sorted(courses.items())],
         "deadlines": sorted(({"title": d["title"], "course": d["course"], "due": d["due"]}
