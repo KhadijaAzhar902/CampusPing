@@ -95,6 +95,16 @@ def short_course(name):
     return " ".join(parts[:2]) if len(parts) > 1 else name
 
 
+# Courses you dropped / don't want alerts for (matched against the start of the LMS course name).
+# Add more codes here, or set EXCLUDE_COURSES="AI395,CS4135" in .env / GitHub.
+EXCLUDE = tuple(c.strip().upper() for c in
+                (os.getenv("EXCLUDE_COURSES") or "AI395,CS4135").split(",") if c.strip())
+
+
+def excluded(fullname):
+    return fullname.strip().upper().startswith(EXCLUDE)
+
+
 def collect(s):
     sesskey = lms._sesskey(s.get(f"{lms.BASE}/my/", timeout=30).text)
     courses = []
@@ -104,6 +114,8 @@ def collect(s):
                          "customfieldname": "", "customfieldvalue": ""})["courses"]
     items, errors = {}, []
     for c in courses:
+        if excluded(c["fullname"]):
+            continue
         cname = short_course(c["fullname"])
         try:
             st = json.loads(ajax(s, sesskey, "core_courseformat_get_state", {"courseid": c["id"]}))
@@ -122,6 +134,8 @@ def collect(s):
             args["aftereventid"] = after
         evs = ajax(s, sesskey, "core_calendar_get_action_events_by_timesort", args)["events"]
         for e in evs:
+            if excluded(e["course"]["fullnamedisplay"]):
+                continue
             due = datetime.fromtimestamp(e["timesort"], timezone.utc)
             deadlines[f"ev{e['id']}"] = {"title": e["name"].replace(" is due", ""),
                                          "course": short_course(e["course"]["fullnamedisplay"]),
