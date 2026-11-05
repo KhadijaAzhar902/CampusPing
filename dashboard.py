@@ -38,21 +38,26 @@ def previous(passphrase):
         return None
 
 
-def write(passphrase, items, deadlines, new_events):
+def write(passphrase, items, deadlines, new_events, resolve=None, cache=None):
     """items/deadlines come from main.collect(); new_events are alerts sent in this run."""
     old = previous(passphrase) or {}
     history = (new_events + old.get("history", []))[:MAX_HISTORY]
     courses = {}
     for k, it in items.items():
         courses.setdefault(it["course"], []).append((int(k[2:]), it))
+    cache = {} if cache is None else cache
+    def url_of(i):
+        return resolve(i) if resolve else i["url"]
     payload = {
         "courses": [{"name": name, "count": len(lst),
-                     "latest": [{"name": i["name"], "module": i["module"], "url": i["url"]}
+                     "latest": [{"name": i["name"], "module": i["module"], "url": url_of(i)}
                                 for _, i in sorted(lst, key=lambda x: -x[0])[:5]]}
                     for name, lst in sorted(courses.items())],
         "deadlines": sorted(({"title": d["title"], "course": d["course"], "due": d["due"]}
                              for d in deadlines.values()), key=lambda d: d["due"]),
         "history": history,
+        "resolved": {u: v for u, v in cache.items()
+                     if any(u == i["url"] for _, lst in courses.items() for _, i in lst)},
     }
     # Only rewrite when something changed, so we don't make a commit every 15 minutes.
     if old and all(old.get(k) == payload[k] for k in payload):

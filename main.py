@@ -4,7 +4,7 @@
   python main.py            check every 15 minutes (leave running)
   python main.py --dry      print messages instead of sending
 """
-import json, os, sys, time, html
+import json, os, re, sys, time, html
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 import requests
@@ -146,6 +146,24 @@ def collect(s):
     return items, deadlines, errors
 
 
+def direct_url(s, it, cache):
+    """Web-link items (Drive, YouTube, ...) open on an LMS 'click here' page. Return the real address."""
+    if it["module"] != "url" or not it["url"]:
+        return it["url"]
+    if it["url"] in cache:
+        return cache[it["url"]]
+    try:
+        page = s.get(it["url"], timeout=30).text
+        m = re.search(r'urlworkaround[^>]*>.*?<a href="([^"]+)"', page, re.S)
+        final = html.unescape(m.group(1)) if m else it["url"]
+        if not final.startswith(("http://", "https://")):
+            final = it["url"]
+    except Exception:
+        final = it["url"]
+    cache[it["url"]] = final
+    return final
+
+
 def fmt_due(iso):
     d = datetime.fromisoformat(iso).astimezone(PKT)
     return d.strftime("%a %d %b, %I:%M %p")
@@ -155,6 +173,9 @@ def check():
     s = lms.login()
     items, deadlines, errors = collect(s)
     st = load_state()
+    key = os.getenv("DASH_KEY")
+    cache = dict(((dashboard.previous(key) or {}).get("resolved", {}))) if key else {}
+    resolve = lambda it: direct_url(s, it, cache)
     now = datetime.now(timezone.utc)
     if st is None:  # first run: remember what exists, don't spam
         upcoming = sorted((d for d in deadlines.values() if datetime.fromisoformat(d["due"]) > now),
@@ -167,7 +188,7 @@ def check():
         send("\n".join(lines))
         save_state({"items": list(items), "deadlines": {k: v["due"] for k, v in deadlines.items()},
                     "reminded": {}})
-        update_dashboard(items, deadlines, [])
+        update_dashboard(items, deadlines, [], resolve, cache)
         return
     seen, known_dl, reminded = set(st["items"]), st["deadlines"], st["reminded"]
     events = []
@@ -200,15 +221,15 @@ def check():
     save_state({"items": list(set(st["items"]) | set(items)),
                 "deadlines": {**known_dl, **{k: v["due"] for k, v in deadlines.items()}},
                 "reminded": reminded})
-    update_dashboard(items, deadlines, events)
+    update_dashboard(items, deadlines, events, resolve, cache)
 
 
-def update_dashboard(items, deadlines, events):
+def update_dashboard(items, deadlines, events, resolve, cache):
     key = os.getenv("DASH_KEY")
     if not key:
         return
     try:
-        if dashboard.write(key, items, deadlines, events):
+        if dashboard.write(key, items, deadlines, events, resolve, cache):
             print("dashboard data updated")
     except Exception as e:
         print("dashboard update failed:", e)
