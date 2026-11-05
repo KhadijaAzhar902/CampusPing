@@ -120,7 +120,7 @@ def collect(s, deep_labels=True, prev_labels=None):
         courses += ajax(s, sesskey, "core_course_get_enrolled_courses_by_timeline_classification",
                         {"offset": 0, "limit": 0, "classification": cls, "sort": "fullname",
                          "customfieldname": "", "customfieldvalue": ""})["courses"]
-    items, errors = {}, []
+    items, errors, cm_week = {}, [], {}
     for c in courses:
         if excluded(c["fullname"]):
             continue
@@ -131,18 +131,22 @@ def collect(s, deep_labels=True, prev_labels=None):
             errors.append(f"{cname}: {e}")
             continue
         label_sections, forum_cms = set(), []
+        titles = {x.get("number"): clean(x.get("title", "")) for x in st.get("section", [])}
+        week_of = lambda n: titles.get(n, "") if re.match(r"week\b", titles.get(n, ""), re.I) else ""
         for cm in st.get("cm", []):
             if not cm.get("visible", True):
                 continue
+            week = week_of(cm.get("sectionnumber"))
             if cm.get("module") == "label":
                 label_sections.add(cm.get("sectionnumber"))
                 if clean(cm["name"]):  # a text block: only worth an alert if the teacher adds a new one
-                    items[f"cm{cm['id']}"] = {"course": cname, "name": clean(cm["name"])[:140],
+                    items[f"cm{cm['id']}"] = {"course": cname, "name": clean(cm["name"])[:140], "week": week,
                                               "module": "label", "url": f"{lms.BASE}/course/view.php?id={c['id']}"}
                 continue
+            cm_week[(int(c["id"]), int(cm["id"]))] = week  # the LMS gives some ids as text
             if cm.get("module") == "forum":
                 forum_cms.append(cm["id"])
-            items[f"cm{cm['id']}"] = {"course": cname, "name": clean(cm["name"]),
+            items[f"cm{cm['id']}"] = {"course": cname, "name": clean(cm["name"]), "week": week,
                                       "module": cm.get("module", ""), "url": cm.get("url", "")}
         # --- things the course list hides: forum posts (every run) and handouts inside text blocks ---
         try:
@@ -151,9 +155,10 @@ def collect(s, deep_labels=True, prev_labels=None):
                 items[k] = {"course": cname, **p}
             errors += [f"{cname}: {e}" for e in e1]
             if deep_labels:
-                links, e2 = deep.label_links(s, lms.BASE, c["id"], sorted(x for x in label_sections if x is not None))
+                links, e2 = deep.label_links(s, lms.BASE, c["id"], sorted(x for x in label_sections if x is not None),
+                                             titles)
                 for k, p in links.items():
-                    items[k] = {"course": cname, **p}
+                    items[k] = {"course": cname, "week": week_of(p.get("section")), **p}
                 errors += [f"{cname}: {e}" for e in e2]
         except Exception as e:
             errors.append(f"{cname} deep scan: {e}")
@@ -171,8 +176,10 @@ def collect(s, deep_labels=True, prev_labels=None):
             if excluded(e["course"]["fullnamedisplay"]):
                 continue
             due = datetime.fromtimestamp(e["timesort"], timezone.utc)
+            m = re.search(r"[?&]id=(\d+)", e.get("url") or "")
             deadlines[f"ev{e['id']}"] = {"title": e["name"].replace(" is due", ""),
                                          "course": short_course(e["course"]["fullnamedisplay"]),
+                                         "week": cm_week.get((int(e["course"]["id"]), int(m.group(1))), "") if m else "",
                                          "due": due.isoformat()}
         if len(evs) < 50:
             break
@@ -196,6 +203,11 @@ def direct_url(s, it, cache):
         final = it["url"]
     cache[it["url"]] = final
     return final
+
+
+def wk(x):
+    """A line telling which week of the course an item belongs to (empty if unknown)."""
+    return f"\n📍 {x['week']}" if x.get("week") else ""
 
 
 def fmt_due(iso):
@@ -225,7 +237,8 @@ def check():
                  f"Watching {len({i['course'] for i in items.values()})} courses, {len(items)} items."]
         if upcoming:
             lines.append("\n<b>Upcoming deadlines</b>")
-            lines += [f"• {html.escape(d['title'])} — {fmt_due(d['due'])}" for d in upcoming[:10]]
+            lines += [f"• {html.escape(d['title'])} — {fmt_due(d['due'])}" + (f" ({d['week']})" if d.get("week") else "")
+                      for d in upcoming[:10]]
         send("\n".join(lines))
         save_state({"items": list(items), "deadlines": {k: v["due"] for k, v in deadlines.items()},
                     "reminded": {}, "deep_baselined": True, "last_deep": last_deep})
@@ -245,7 +258,8 @@ def check():
                      "These were already on your LMS (hidden handouts and forum posts)."]
             for course, lst in sorted(by_course.items()):
                 lines.append(f"\n<b>{html.escape(course)}</b>")
-                lines += [f"• {html.escape(i['name'])}\n  {i['url']}" for i in lst[:25]]
+                lines += [f"• {html.escape(i['name'])}" + (f" ({i['week']})" if i.get("week") else "") + f"\n  {i['url']}"
+                          for i in lst[:25]]
                 if len(lst) > 25:
                     lines.append(f"  …and {len(lst) - 25} more")
             send("\n".join(lines))
@@ -253,31 +267,31 @@ def check():
         # the 23 template text blocks per course already exist: remember them silently
         seen |= {k for k, it in items.items() if it["module"] == "label" or k.startswith("tx")}
 
-    def log(kind, title, course, url=""):
-        events.append({"t": now.isoformat(), "kind": kind, "title": title, "course": course, "url": url})
+    def log(kind, title, course, url="", week=""):
+        events.append({"t": now.isoformat(), "kind": kind, "title": title, "course": course, "url": url, "week": week})
     for k, it in items.items():
         if k not in seen:
             icon = ICONS.get(it["module"], "🆕")
             link = resolve(it)
             what = {"post": "New post", "pluginfile": "New handout", "label": "New note", "update": "Week text updated"}.get(it["module"], "New")
-            send(f"{icon} <b>{what} in {html.escape(it['course'])}</b>\n{html.escape(it['name'])}\n{link}")
-            log("new", it["name"], it["course"], link)
+            send(f"{icon} <b>{what} in {html.escape(it['course'])}</b>\n{html.escape(it['name'])}{wk(it)}\n{link}")
+            log("new", it["name"], it["course"], link, it.get("week", ""))
     for k, d in deadlines.items():
         due = datetime.fromisoformat(d["due"])
         if k not in known_dl:
             if due > now:
-                send(f"⏰ <b>New deadline</b>\n{html.escape(d['title'])}\n{html.escape(d['course'])}\nDue {fmt_due(d['due'])}")
-                log("deadline", d["title"], d["course"])
+                send(f"⏰ <b>New deadline</b>\n{html.escape(d['title'])}\n{html.escape(d['course'])}{wk(d)}\nDue {fmt_due(d['due'])}")
+                log("deadline", d["title"], d["course"], week=d.get("week", ""))
         elif known_dl[k] != d["due"]:
-            send(f"🔄 <b>Deadline changed</b>\n{html.escape(d['title'])}\nNow due {fmt_due(d['due'])}")
-            log("changed", d["title"], d["course"])
+            send(f"🔄 <b>Deadline changed</b>\n{html.escape(d['title'])}{wk(d)}\nNow due {fmt_due(d['due'])}")
+            log("changed", d["title"], d["course"], week=d.get("week", ""))
             reminded.pop(k + "|24", None); reminded.pop(k + "|3", None)
         for hrs in (24, 3):
             tag = f"{k}|{hrs}"
             if tag not in reminded and now < due <= now + timedelta(hours=hrs):
-                send(f"⚠️ <b>Due in under {hrs} hours</b>\n{html.escape(d['title'])}\n{html.escape(d['course'])}\n{fmt_due(d['due'])}")
+                send(f"⚠️ <b>Due in under {hrs} hours</b>\n{html.escape(d['title'])}\n{html.escape(d['course'])}{wk(d)}\n{fmt_due(d['due'])}")
                 reminded[tag] = True
-                log("reminder", f"{d['title']} (under {hrs}h)", d["course"])
+                log("reminder", f"{d['title']} (under {hrs}h)", d["course"], week=d.get("week", ""))
     if errors:
         print("warnings:", errors)
     save_state({"items": list(seen | set(items)),

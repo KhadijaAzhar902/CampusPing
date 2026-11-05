@@ -21,7 +21,7 @@ def _name_from_link(a, href):
     return (tail or text or href)[:140]
 
 
-def label_links(session, base, course_id, section_numbers):
+def label_links(session, base, course_id, section_numbers, titles=None):
     """{key: item} for every useful link inside label blocks of the given sections."""
     found = {}
 
@@ -52,7 +52,7 @@ def label_links(session, base, course_id, section_numbers):
             text = re.sub(r"(Select activity|Mark as done|Done)", "", text).strip()
             if len(text) > 15:  # fingerprint of the block's wording: changes when the teacher edits it
                 found[f"tx{cmid}|{hashlib.md5(text.encode()).hexdigest()[:10]}"] = {
-                    "name": f"Week {sec}: {text[:90]}", "module": "update", "section": sec,
+                    "name": f"{(titles or {}).get(sec) or 'Section ' + str(sec)}: {text[:90]}", "module": "update", "section": sec,
                     "url": f"{base}/course/view.php?id={course_id}&section={sec}"}
             for a in li.find_all("a", href=True):
                 href = html.unescape(a["href"]).strip()

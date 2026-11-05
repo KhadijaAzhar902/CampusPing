@@ -56,11 +56,11 @@ def write(passphrase, items, deadlines, new_events, resolve=None, cache=None):
         rest = [x for x in lst if x[2]["module"] not in ("post", "label", "update")]
         # every item, newest first (forum posts lead): the page shows 3 and expands to all
         return {"name": name, "count": len(posts) + len(rest),
-                "items": [{"name": i["name"], "module": i["module"], "url": url_of(i)}
+                "items": [{"name": i["name"], "module": i["module"], "url": url_of(i), "week": i.get("week", "")}
                           for _, _, i in posts + rest]}
     payload = {
         "courses": [card(name, lst) for name, lst in sorted(courses.items())],
-        "deadlines": sorted(({"title": d["title"], "course": d["course"], "due": d["due"]}
+        "deadlines": sorted(({"title": d["title"], "course": d["course"], "due": d["due"], "week": d.get("week", "")}
                              for d in deadlines.values()), key=lambda d: d["due"]),
         "history": history,
         "labels": {k: i for k, i in items.items() if k[:2] in ("lb", "tx")},  # remembered between hourly deep scans

@@ -111,7 +111,7 @@ function render() {
   for (const x of upcoming) {
     const c = countdown(x.due);
     dl.append(el("div", {class:"row"},
-      el("div", {}, el("b", {text:x.title}), el("div", {class:"course", text:x.course + " · " + fmtDate(x.due)})),
+      el("div", {}, el("b", {text:x.title}), el("div", {class:"course", text:[x.course, x.week, fmtDate(x.due)].filter(Boolean).join(" · ")})),
       el("span", {class:"chip " + c.cls, text:c.text})));
   }
   if (!d.history.length) hs.append(el("div", {class:"empty", text:"Nothing new yet. Alerts will appear here."}));
@@ -119,7 +119,7 @@ function render() {
     const u = safeUrl(x.url);
     hs.append(el("div", {class:"row"},
       el("div", {}, u ? el("a", {href:u, target:"_blank", rel:"noopener noreferrer", text:x.title}) : el("b", {text:x.title}),
-         el("div", {class:"course", text:x.course + " · " + fmtAgo(x.t)})),
+         el("div", {class:"course", text:[x.course, x.week, fmtAgo(x.t)].filter(Boolean).join(" · ")})),
       el("span", {class:"chip later", text:KINDS[x.kind] || "Update"})));
   }
   for (const c of d.courses) {
@@ -128,7 +128,7 @@ function render() {
     for (const i of shown) {
       const u = safeUrl(i.url), tag = TYPES[i.module];
       ul.append(el("li", {}, u ? el("a", {href:u, target:"_blank", rel:"noopener noreferrer", text:i.name}) : i.name,
-        tag ? el("span", {class:"tag", text:" · " + tag}) : null));
+        (i.week || tag) ? el("span", {class:"tag", text:" · " + [i.week, tag].filter(Boolean).join(" · ")}) : null));
     }
     const card = el("div", {class:"card"}, el("h3", {text:c.name}),
       el("div", {class:"sub", text:c.count + " items"}), ul);
