@@ -1,0 +1,4 @@
+.env
+.feed_url
+__pycache__/
+*.pyc
