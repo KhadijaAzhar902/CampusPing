@@ -38,7 +38,6 @@ input[type=password]{width:100%;padding:11px 12px;border-radius:10px;border:1px 
 .lock label.chk{font-size:.85rem;color:var(--muted);display:flex;gap:8px;align-items:center}
 .err{color:#dc2626;font-size:.9rem;min-height:1.2em;text-align:center}
 .empty{color:var(--muted);padding:6px 0}
-.demo{background:var(--soft);color:var(--accent);padding:8px 14px;border-radius:10px;font-size:.85rem;margin-bottom:16px}
 [hidden]{display:none!important}
 </style>
 </head>
@@ -53,7 +52,6 @@ input[type=password]{width:100%;padding:11px 12px;border-radius:10px;border:1px 
       <button type="submit">Unlock</button>
       <div class="err" id="err" role="alert"></div>
     </form>
-    <button class="ghost" id="demoBtn" type="button">View demo with sample data</button>
   </section>
 
   <section id="app" hidden>
@@ -61,7 +59,6 @@ input[type=password]{width:100%;padding:11px 12px;border-radius:10px;border:1px 
       <div><h1><span>Campus</span>Ping</h1><div class="sub" id="updated"></div></div>
       <button class="ghost" id="lockBtn" type="button">Lock</button>
     </header>
-    <div class="demo" id="demoNote" hidden>Demo mode: all data below is made up.</div>
     <h2>Next up</h2><div class="card" id="deadlines"></div>
     <h2>Recent alerts</h2><div class="card" id="history"></div>
     <h2>Courses</h2><div class="grid" id="courses"></div>
@@ -128,9 +125,9 @@ function render() {
     cs.append(el("div", {class:"card"}, el("h3", {text:c.name}), el("div", {class:"sub", text:c.count + " items"}), ul));
   }
 }
-function show(data, demo) {
+function show(data) {
   DATA = data;
-  $("lock").hidden = true; $("app").hidden = false; $("demoNote").hidden = !demo;
+  $("lock").hidden = true; $("app").hidden = false;
   render(); clearInterval(timer); timer = setInterval(render, 60000);
 }
 
@@ -149,42 +146,19 @@ async function unlock(pass, remember) {
     if (!r.ok) throw new Error("no data");
     const data = await decrypt(pass, await r.json());
     if (remember) { try { localStorage.setItem("cp_pass", pass); } catch {} }
-    show(data, false);
+    show(data);
   } catch (e) {
     $("err").textContent = e.message === "no data" ? "No data published yet. Wait for the first update." : "Wrong passphrase.";
     $("lock").hidden = false;
   }
 }
 
-const hrs = h => new Date(Date.now() + h * 36e5).toISOString();
-const ago = h => new Date(Date.now() - h * 36e5).toISOString();
-const DEMO = {
-  generated: ago(1),
-  deadlines: [
-    {title:"Lab Task 4", course:"CS201 Data Structures", due:hrs(5)},
-    {title:"Quiz 2", course:"MG101 Marketing", due:hrs(30)},
-    {title:"Assignment 1", course:"IT310 Web Technologies", due:hrs(26 * 4)},
-    {title:"Project Proposal", course:"SE330 Software Engineering", due:hrs(24 * 12)}],
-  history: [
-    {t:ago(0.4), kind:"new", title:"Week 6 Slides", course:"CS201 Data Structures", url:""},
-    {t:ago(3), kind:"deadline", title:"Quiz 2", course:"MG101 Marketing", url:""},
-    {t:ago(20), kind:"new", title:"Announcement: class moved to Room 12", course:"SE330 Software Engineering", url:""},
-    {t:ago(30), kind:"reminder", title:"Lab Task 3 (under 24h)", course:"CS201 Data Structures", url:""}],
-  courses: [
-    {name:"CS201 Data Structures", count:34, latest:[{name:"Week 6 Slides"},{name:"Lab Manual 4"},{name:"Announcements"}]},
-    {name:"MG101 Marketing", count:21, latest:[{name:"Chapter 5 Notes"},{name:"Quiz 2"}]},
-    {name:"IT310 Web Technologies", count:28, latest:[{name:"Assignment 1"},{name:"Figma Template"}]},
-    {name:"SE330 Software Engineering", count:19, latest:[{name:"Project Guidelines"},{name:"Announcements"}]}]
-};
-
 $("form").addEventListener("submit", e => { e.preventDefault(); unlock($("pass").value, $("remember").checked); });
-$("demoBtn").addEventListener("click", () => show(DEMO, true));
 $("lockBtn").addEventListener("click", () => {
   try { localStorage.removeItem("cp_pass"); } catch {}
   clearInterval(timer); DATA = null; $("pass").value = ""; $("app").hidden = true; $("lock").hidden = false;
 });
 (async () => {
-  if (new URLSearchParams(location.search).has("demo")) return show(DEMO, true);
   let saved = null; try { saved = localStorage.getItem("cp_pass"); } catch {}
   $("lock").hidden = false;
   if (saved) unlock(saved, false);
