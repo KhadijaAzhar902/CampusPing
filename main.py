@@ -45,7 +45,7 @@ def send(text):
                           headers={"Title": title.encode("utf-8"), "Priority": "high"}, timeout=30).raise_for_status()
             sent = True
         except Exception as e:
-            print("ntfy failed:", e)
+            print("ntfy failed:", type(e).__name__)
     if os.getenv("EMAIL_USER") and os.getenv("EMAIL_APP_PASSWORD"):
         try:
             import smtplib
@@ -59,7 +59,7 @@ def send(text):
                 smtp.send_message(m)
             sent = True
         except Exception as e:
-            print("email failed:", e)
+            print("email failed:", type(e).__name__)
     if os.getenv("TELEGRAM_BOT_TOKEN") and os.getenv("TELEGRAM_CHAT_ID"):
         try:
             requests.post(f"https://api.telegram.org/bot{os.environ['TELEGRAM_BOT_TOKEN']}/sendMessage",
@@ -67,9 +67,10 @@ def send(text):
                                 "disable_web_page_preview": True}, timeout=30).raise_for_status()
             sent = True
         except Exception as e:
-            print("telegram failed:", e)
+            print("telegram failed:", type(e).__name__)
     if not sent:
-        print("[no channel configured]\n" + p + "\n")
+        # GitHub's build logs are public: never print message text (course names, files) there.
+        print("[no channel delivered the message: check EMAIL_USER / EMAIL_APP_PASS]")
 
 
 def load_state():
@@ -293,7 +294,8 @@ def check():
                 reminded[tag] = True
                 log("reminder", f"{d['title']} (under {hrs}h)", d["course"], week=d.get("week", ""))
     if errors:
-        print("warnings:", errors)
+        # course names appear in these details; hide them in public CI logs, show them on your own PC
+        print("warnings:", f"{len(errors)} page(s) could not be read" if os.getenv("GITHUB_ACTIONS") else errors)
     save_state({"items": list(seen | set(items)),
                 "deadlines": {**known_dl, **{k: v["due"] for k, v in deadlines.items()}},
                 "reminded": reminded, "deep_baselined": True, "last_deep": last_deep})
@@ -308,7 +310,7 @@ def update_dashboard(items, deadlines, events, resolve, cache):
         if dashboard.write(key, items, deadlines, events, resolve, cache):
             print("dashboard data updated")
     except Exception as e:
-        print("dashboard update failed:", e)
+        print("dashboard update failed:", type(e).__name__)
 
 
 FAIL_AFTER = 3          # consecutive failed runs (about 45 min) before you get an email
